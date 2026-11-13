@@ -1,0 +1,32 @@
+diff --git a/native/windows-agent-hook/build.rs b/native/windows-agent-hook/build.rs
+index 297a7ecc180..8cca5c422de 100644
+--- a/native/windows-agent-hook/build.rs
++++ b/native/windows-agent-hook/build.rs
+@@ -20,6 +20,11 @@ fn main() {
+     let (major, minor, patch) = numeric_version_parts(&version);
+ 
+     let mut resource = winresource::WindowsResource::new();
++    // An explicit SDK bin dir (rc.exe's folder) skips the registry lookup, which endpoint
++    // policies can block.
++    if let Ok(toolkit) = env::var("ORCA_WINDOWS_RC_TOOLKIT") {
++        resource.set_toolkit_path(&toolkit);
++    }
+     resource.set("ProductName", "Orca");
+     resource.set("FileDescription", "Orca Agent Hook");
+     resource.set("CompanyName", "Stably AI");
+diff --git a/native/windows-cli-launcher/build.rs b/native/windows-cli-launcher/build.rs
+index eb66b08d0e8..5eae5cdc968 100644
+--- a/native/windows-cli-launcher/build.rs
++++ b/native/windows-cli-launcher/build.rs
+@@ -24,6 +24,11 @@ fn main() {
+     let (major, minor, patch) = numeric_version_parts(&version);
+ 
+     let mut resource = winresource::WindowsResource::new();
++    // An explicit SDK bin dir (rc.exe's folder) skips the registry lookup, which endpoint
++    // policies can block.
++    if let Ok(toolkit) = env::var("ORCA_WINDOWS_RC_TOOLKIT") {
++        resource.set_toolkit_path(&toolkit);
++    }
+     resource.set("ProductName", "Orca");
+     resource.set("FileDescription", "Orca CLI Launcher");
+     resource.set("CompanyName", "Stably AI");

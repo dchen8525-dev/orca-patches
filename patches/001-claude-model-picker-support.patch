@@ -1,0 +1,310 @@
+diff --git a/src/main/claude/model-catalog/claude-model-catalog-probe.ts b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
+index fee0027363d..a5366c73b87 100644
+--- a/src/main/claude/model-catalog/claude-model-catalog-probe.ts
++++ b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
+@@ -21,6 +21,7 @@ import {
+   wireClaudeModels
+ } from '../structured/launch/claude-structured-catalog-listing'
+ import { readClaudeSettingsApplied } from '../structured/launch/claude-structured-session-options'
++import { applyClaudeModelPicker, readClaudeModelPicker } from './claude-model-picker-settings'
+ import { readClaudeControlResponses } from '../sdk-transport/claude-control-responses'
+ import { claudeStructuredLaunchArgs } from '../structured/launch/claude-structured-launch-args'
+ import { AgentModelCatalogUnavailableError } from '../../native-chat/agent-model-catalog/agent-model-catalog-unavailable'
+@@ -253,9 +254,14 @@ export function createClaudeModelCatalogProbe(
+         if (models.length === 0) {
+           throw new Error('claude listed no models')
+         }
++        const picker = readClaudeModelPicker(requireLegacyAgentSessionAccountHome(accountHome).path)
++        const wired = wireClaudeModels(models)
++        const curated = picker ? applyClaudeModelPicker(wired, picker) : wired
++        // A picker naming only unknown models must not blank the chat's model menu.
++        const listed = curated.length > 0 ? curated : wired
+         const fastModeSupport = claudeFastModeSupport(models)
+         return {
+-          models: wireClaudeModels(models),
++          models: listed,
+           origin: 'probe',
+           complete: isCompleteClaudeModelListing(listing) && configured !== undefined,
+           ...(fastModeSupport ? { fastModeSupport } : {}),
+diff --git a/src/main/claude/model-catalog/claude-model-picker-settings.test.ts b/src/main/claude/model-catalog/claude-model-picker-settings.test.ts
+new file mode 100644
+index 00000000000..df309bb4153
+--- /dev/null
++++ b/src/main/claude/model-catalog/claude-model-picker-settings.test.ts
+@@ -0,0 +1,168 @@
++import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { describe, expect, it } from 'vitest'
++
++import { applyClaudeModelPicker, readClaudeModelPicker } from './claude-model-picker-settings'
++
++const PICKER = {
++  options: [
++    { model: 'imported/qiniu/conatus-free[1M]', label: 'qiniu/conatus-free[1M] · 七牛云' },
++    {
++      model: 'deepseek-flash/deepseek-v4.1-flash-1017[1M][1m]',
++      label: 'DeepSeek V4.1 Flash 1017 [1M] · 李尔'
++    },
++    { model: 'deepseek-flash/glm-5.3-flash[1M][1m]', label: 'GLM-5.3-Flash [1M] · 李尔' }
++  ],
++  replaceBuiltInOptions: true
++}
++
++// Probe rows as the CLI lists them: one canonical id plus the settings alias row per model.
++const LISTED = [
++  {
++    id: 'imported/qiniu/conatus-free[1M]',
++    label: 'qiniu/conatus-free[1M] · 七牛云 alias',
++    resolvedModel: 'imported/qiniu/conatus-free[1m]',
++    isDefault: false,
++    efforts: []
++  },
++  {
++    id: 'imported/qiniu/conatus-free[1m]',
++    label: 'Imported Qiniu Conatus Free (1M context)',
++    resolvedModel: 'imported/qiniu/conatus-free[1m]',
++    isDefault: false,
++    efforts: []
++  },
++  {
++    id: 'deepseek-flash/deepseek-v4.1-flash-1017[1M][1m]',
++    label: 'DeepSeek V4.1 Flash 1017 [1M] · 李尔 alias',
++    resolvedModel: 'deepseek-flash/deepseek-v4.1-flash-1017[1m]',
++    isDefault: false,
++    efforts: [{ value: 'high', label: 'High' }]
++  },
++  {
++    id: 'deepseek-flash/deepseek-v4.1-flash-1017[1m]',
++    label: 'Deepseek Flash Deepseek V4.1 Flash 1017 (1M context)',
++    resolvedModel: 'deepseek-flash/deepseek-v4.1-flash-1017[1m]',
++    isDefault: true,
++    efforts: [{ value: 'high', label: 'High' }]
++  },
++  {
++    id: 'deepseek-flash/glm-5.3-flash[1M][1m]',
++    label: 'GLM-5.3-Flash [1M] · 李尔 alias',
++    resolvedModel: 'deepseek-flash/glm-5.3-flash[1m]',
++    isDefault: false,
++    efforts: []
++  },
++  {
++    id: 'deepseek-flash/glm-5.3-flash[1m]',
++    label: 'Deepseek Flash Glm 5.3 Flash (1M context)',
++    resolvedModel: 'deepseek-flash/glm-5.3-flash[1m]',
++    isDefault: false,
++    efforts: [{ value: 'max', label: 'Max' }]
++  }
++]
++
++describe('applyClaudeModelPicker', () => {
++  it('replaces the listing with option rows in option order under option labels', () => {
++    const rows = applyClaudeModelPicker(LISTED, PICKER)
++    expect(rows.map((row) => row.id)).toEqual([
++      'imported/qiniu/conatus-free[1M]',
++      'deepseek-flash/deepseek-v4.1-flash-1017[1M][1m]',
++      'deepseek-flash/glm-5.3-flash[1M][1m]'
++    ])
++    expect(rows.map((row) => row.label)).toEqual([
++      'qiniu/conatus-free[1M] · 七牛云',
++      'DeepSeek V4.1 Flash 1017 [1M] · 李尔',
++      'GLM-5.3-Flash [1M] · 李尔'
++    ])
++    expect(rows[1].efforts).toEqual([{ value: 'high', label: 'High' }])
++    expect(rows[1].isDefault).toBe(false)
++    expect(rows[2].efforts).toEqual([{ value: 'max', label: 'Max' }])
++  })
++
++  it('keeps a canonical row when an option names its id and drops unknown options', () => {
++    const rows = applyClaudeModelPicker([LISTED[3], LISTED[1]], {
++      options: [
++        { model: 'deepseek-flash/deepseek-v4.1-flash-1017[1m]', label: 'DeepSeek · 李尔' },
++        { model: 'unlisted/model', label: 'Unlisted' }
++      ],
++      replaceBuiltInOptions: true
++    })
++    expect(rows).toHaveLength(1)
++    expect(rows[0].id).toBe('deepseek-flash/deepseek-v4.1-flash-1017[1m]')
++    expect(rows[0].label).toBe('DeepSeek · 李尔')
++    expect(rows[0].isDefault).toBe(true)
++  })
++
++  it('keeps every row and only renames option rows when replaceBuiltInOptions is false', () => {
++    const rows = applyClaudeModelPicker(LISTED, { ...PICKER, replaceBuiltInOptions: false })
++    expect(rows).toHaveLength(LISTED.length)
++    expect(rows.map((row) => row.id)).toEqual(LISTED.map((row) => row.id))
++    expect(rows[0].label).toBe('qiniu/conatus-free[1M] · 七牛云')
++    expect(rows[1].label).toBe('Imported Qiniu Conatus Free (1M context)')
++    expect(rows[2].label).toBe('DeepSeek V4.1 Flash 1017 [1M] · 李尔')
++    expect(rows[3].label).toBe('Deepseek Flash Deepseek V4.1 Flash 1017 (1M context)')
++  })
++
++  it('leaves the listing untouched when no option names a listed row', () => {
++    expect(
++      applyClaudeModelPicker(LISTED, {
++        options: [{ model: 'other/model' }],
++        replaceBuiltInOptions: true
++      })
++    ).toEqual([])
++  })
++})
++
++describe('readClaudeModelPicker', () => {
++  it('reads the curated picker from the account settings.json', () => {
++    const home = mkdtempSync(join(tmpdir(), 'orca-picker-home-'))
++    try {
++      writeFileSync(
++        join(home, 'settings.json'),
++        JSON.stringify({
++          modelPicker: {
++            options: [{ model: 'opus', label: 'Opus (daily)' }],
++            replaceBuiltInOptions: true
++          }
++        })
++      )
++      expect(readClaudeModelPicker(home)).toEqual({
++        options: [{ model: 'opus', label: 'Opus (daily)' }],
++        replaceBuiltInOptions: true
++      })
++    } finally {
++      rmSync(home, { recursive: true, force: true })
++    }
++  })
++
++  it('ignores blank labels, malformed rows and unreadable settings', () => {
++    const home = mkdtempSync(join(tmpdir(), 'orca-picker-home-'))
++    try {
++      writeFileSync(
++        join(home, 'settings.json'),
++        JSON.stringify({
++          modelPicker: {
++            options: [
++              { model: '  ', label: 'Broken' },
++              { label: 'No model' },
++              { model: 'haiku', label: '   ' }
++            ],
++            replaceBuiltInOptions: true
++          }
++        })
++      )
++      expect(readClaudeModelPicker(home)).toEqual({
++        options: [{ model: 'haiku' }],
++        replaceBuiltInOptions: true
++      })
++      writeFileSync(join(home, 'settings.json'), '{ not json')
++      expect(readClaudeModelPicker(home)).toBeNull()
++      writeFileSync(join(home, 'settings.json'), JSON.stringify({ model: 'opus' }))
++      expect(readClaudeModelPicker(home)).toBeNull()
++    } finally {
++      rmSync(home, { recursive: true, force: true })
++    }
++  })
++})
+diff --git a/src/main/claude/model-catalog/claude-model-picker-settings.ts b/src/main/claude/model-catalog/claude-model-picker-settings.ts
+new file mode 100644
+index 00000000000..7b3ecad829a
+--- /dev/null
++++ b/src/main/claude/model-catalog/claude-model-picker-settings.ts
+@@ -0,0 +1,102 @@
++import { readFileSync } from 'node:fs'
++import { join } from 'node:path'
++
++type ClaudeModelPickerOption = {
++  model: string
++  label?: string
++  description?: string
++}
++
++export type ClaudeModelPickerConfig = {
++  options: readonly ClaudeModelPickerOption[]
++  replaceBuiltInOptions: boolean
++}
++
++type PickerTarget = {
++  id: string
++  label: string
++  description?: string
++  resolvedModel?: string | null
++  efforts: readonly { value: string; label: string }[]
++}
++
++// A malformed or commented settings.json must never fail the listing probe.
++export function readClaudeModelPicker(accountHomePath: string): ClaudeModelPickerConfig | null {
++  try {
++    const parsed: unknown = JSON.parse(readFileSync(join(accountHomePath, 'settings.json'), 'utf8'))
++    const picker =
++      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
++        ? (parsed as Record<string, unknown>).modelPicker
++        : undefined
++    if (!picker || typeof picker !== 'object' || Array.isArray(picker)) {
++      return null
++    }
++    const rawOptions = (picker as Record<string, unknown>).options
++    if (!Array.isArray(rawOptions)) {
++      return null
++    }
++    const options: ClaudeModelPickerOption[] = []
++    for (const entry of rawOptions) {
++      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
++        continue
++      }
++      const row = entry as Record<string, unknown>
++      if (typeof row.model !== 'string' || !row.model.trim()) {
++        continue
++      }
++      options.push({
++        model: row.model,
++        ...(typeof row.label === 'string' && row.label.trim() ? { label: row.label } : {}),
++        ...(typeof row.description === 'string' && row.description.trim()
++          ? { description: row.description }
++          : {})
++      })
++    }
++    return options.length === 0
++      ? null
++      : {
++          options,
++          replaceBuiltInOptions: (picker as Record<string, unknown>).replaceBuiltInOptions === true
++        }
++  } catch {
++    return null
++  }
++}
++
++/** Rewrites discovered rows the way the CLI renders a curated modelPicker: option labels win, and
++ *  `replaceBuiltInOptions` drops rows no option names. Matching stays exact because the CLI lists
++ *  each settings alias as its own row keyed by the option's literal model string. */
++export function applyClaudeModelPicker<T extends PickerTarget>(
++  models: readonly T[],
++  picker: ClaudeModelPickerConfig
++): T[] {
++  const matches = (row: PickerTarget, option: ClaudeModelPickerOption): boolean =>
++    row.id === option.model || row.resolvedModel === option.model
++  // Alias rows mirror a canonical row's effort menu even when the CLI omits theirs.
++  const withCanonicalEfforts = (row: T): T => {
++    if (row.efforts.length > 0 || !row.resolvedModel) {
++      return row
++    }
++    const canonical = models.find((candidate) => candidate.id === row.resolvedModel)
++    return canonical ? { ...row, efforts: canonical.efforts } : row
++  }
++  const rename = (row: T, option: ClaudeModelPickerOption): T => ({
++    ...withCanonicalEfforts(row),
++    ...(option.label ? { label: option.label } : {}),
++    ...(option.description ? { description: option.description } : {})
++  })
++  if (!picker.replaceBuiltInOptions) {
++    return models.map((row) => {
++      const option = picker.options.find((candidate) => matches(row, candidate))
++      return option ? rename(row, option) : row
++    })
++  }
++  const rows: T[] = []
++  for (const option of picker.options) {
++    const row = models.find((candidate) => matches(candidate, option))
++    if (row) {
++      rows.push(rename(row, option))
++    }
++  }
++  return rows
++}
