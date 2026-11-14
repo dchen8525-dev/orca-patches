@@ -1,31 +1,90 @@
-diff --git a/src/main/claude/model-catalog/claude-model-catalog-probe.ts b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
-index fee0027363d..a5366c73b87 100644
---- a/src/main/claude/model-catalog/claude-model-catalog-probe.ts
-+++ b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
-@@ -21,6 +21,7 @@ import {
+diff --git a/src/main/claude/model-catalog/claude-model-catalog-observation.ts b/src/main/claude/model-catalog/claude-model-catalog-observation.ts
+index 68032bdf3d2..a8150f104d9 100644
+--- a/src/main/claude/model-catalog/claude-model-catalog-observation.ts
++++ b/src/main/claude/model-catalog/claude-model-catalog-observation.ts
+@@ -11,11 +11,13 @@ import {
    wireClaudeModels
  } from '../structured/launch/claude-structured-catalog-listing'
  import { readClaudeSettingsApplied } from '../structured/launch/claude-structured-session-options'
 +import { applyClaudeModelPicker, readClaudeModelPicker } from './claude-model-picker-settings'
- import { readClaudeControlResponses } from '../sdk-transport/claude-control-responses'
- import { claudeStructuredLaunchArgs } from '../structured/launch/claude-structured-launch-args'
- import { AgentModelCatalogUnavailableError } from '../../native-chat/agent-model-catalog/agent-model-catalog-unavailable'
-@@ -253,9 +254,14 @@ export function createClaudeModelCatalogProbe(
-         if (models.length === 0) {
-           throw new Error('claude listed no models')
+ 
+ export function readClaudeCatalogObservation(
+   replies: ReadonlyMap<string, unknown>,
+   env: Readonly<Record<string, string>>,
+-  account: AgentSessionAccountKind
++  account: AgentSessionAccountKind,
++  accountHomePath: string
+ ): AgentModelCatalogSuccess {
+   const listing = replies.get('orca-model-discovery')
+   const models = listedModels(listing)
+@@ -30,8 +32,13 @@ export function readClaudeCatalogObservation(
+     throw new Error('claude listed no models')
+   }
+   const fastModeSupport = claudeFastModeSupport(models)
++  const picker = readClaudeModelPicker(accountHomePath)
++  const wired = wireClaudeModels(models)
++  const curated = picker ? applyClaudeModelPicker(wired, picker) : wired
++  // A picker naming only unknown models must not blank the chat's model menu.
++  const listed = curated.length > 0 ? curated : wired
+   return {
+-    models: wireClaudeModels(models),
++    models: listed,
+     origin: 'probe',
+     complete: isCompleteClaudeModelListing(listing) && configured !== undefined,
+     ...(fastModeSupport ? { fastModeSupport } : {}),
+diff --git a/src/main/claude/model-catalog/claude-model-catalog-probe.ts b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
+index c885cf01b5f..8f3d478beea 100644
+--- a/src/main/claude/model-catalog/claude-model-catalog-probe.ts
++++ b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
+@@ -123,6 +123,7 @@ export function createClaudeModelCatalogProbe(
+     launchDirectory = cwd
+   ) => {
+     assertStructuredAgentResolutionCurrent(operation)
++    const accountHomePath = requireLegacyAgentSessionAccountHome(accountHome).path
+     const configuredArgs = claudeStructuredLaunchArgs(
+       cwd ? ((await deps.resolveLaunchArgs?.()) ?? []) : []
+     )
+@@ -153,7 +154,7 @@ export function createClaudeModelCatalogProbe(
+       launchDeps,
+       (base) => ({
+         ...base,
+-        ...claudeConfigDirEnvPatch(requireLegacyAgentSessionAccountHome(accountHome).path, {
++        ...claudeConfigDirEnvPatch(accountHomePath, {
+           env: base
+         })
+       }),
+@@ -176,7 +177,7 @@ export function createClaudeModelCatalogProbe(
+         prefixArgs,
+         cwd: listIn ?? process.cwd(),
+         env: launchDirectory ? envWithPathRelativeTo(env, launchDirectory) : env,
+-        configFiles: [join(requireLegacyAgentSessionAccountHome(accountHome).path, 'settings.json')]
++        configFiles: [join(accountHomePath, 'settings.json')]
+       }),
+       identity: {
+         command,
+@@ -245,7 +246,7 @@ export function createClaudeModelCatalogProbe(
+                     listedModels(replies.get('orca-model-discovery')).length > 0
+                   ) {
+                     publish?.(
+-                      readClaudeCatalogObservation(replies, env, account),
++                      readClaudeCatalogObservation(replies, env, account, accountHomePath),
+                       record(record(replies.get('orca-signin-discovery'))?.account) !== null &&
+                         record(record(replies.get('orca-model-settings'))?.effective) !== null
+                     )
+@@ -271,7 +272,12 @@ export function createClaudeModelCatalogProbe(
+           }
+           throw outcome
          }
-+        const picker = readClaudeModelPicker(requireLegacyAgentSessionAccountHome(accountHome).path)
-+        const wired = wireClaudeModels(models)
-+        const curated = picker ? applyClaudeModelPicker(wired, picker) : wired
-+        // A picker naming only unknown models must not blank the chat's model menu.
-+        const listed = curated.length > 0 ? curated : wired
-         const fastModeSupport = claudeFastModeSupport(models)
-         return {
--          models: wireClaudeModels(models),
-+          models: listed,
-           origin: 'probe',
-           complete: isCompleteClaudeModelListing(listing) && configured !== undefined,
-           ...(fastModeSupport ? { fastModeSupport } : {}),
+-        return readClaudeCatalogObservation(readClaudeControlResponses(outcome), env, account)
++        return readClaudeCatalogObservation(
++          readClaudeControlResponses(outcome),
++          env,
++          account,
++          accountHomePath
++        )
+       }
+     }
+   }
 diff --git a/src/main/claude/model-catalog/claude-model-picker-settings.test.ts b/src/main/claude/model-catalog/claude-model-picker-settings.test.ts
 new file mode 100644
 index 00000000000..df309bb4153
