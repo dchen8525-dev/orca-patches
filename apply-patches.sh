@@ -16,6 +16,24 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ORCA_DIR"
 
+# List "path<TAB>target blob" for files a patch creates. An interrupted earlier run can leave
+# those files in the working tree; keep them only when their bytes match the patch exactly.
+new_file_targets() {
+  awk '
+    function emit() { if (isnew && path != "" && hash != "") print path "\t" hash }
+    /^diff --git / { emit(); isnew = 0; path = ""; hash = "" }
+    /^new file mode / { isnew = 1 }
+    /^\+\+\+ b\// { path = substr($0, 7) }
+    /^index 00000000000\.\./ {
+      line = $0
+      sub(/^index [0-9a-f]+\.\./, "", line)
+      split(line, parts, " ")
+      hash = parts[1]
+    }
+    END { emit() }
+  ' "$1"
+}
+
 FAILED=()
 for patch in "$SCRIPT_DIR"/patches/*.patch; do
   [ -e "$patch" ] || continue
@@ -26,8 +44,26 @@ for patch in "$SCRIPT_DIR"/patches/*.patch; do
   elif git apply --check --reverse "$patch" 2>/dev/null; then
     echo "SKIPPED  $name (already applied)"
   else
-    echo "CONFLICT $name" >&2
-    FAILED+=("$name")
+    excludes=()
+    verified=1
+    while IFS=$'\t' read -r path expected; do
+      [ -n "$path" ] || continue
+      # Patch index lines carry abbreviated blob ids; compare the same prefix length.
+      actual="$(git hash-object "$path" 2>/dev/null)" || actual=""
+      if [ ! -f "$path" ] || [ "${actual:0:${#expected}}" != "$expected" ]; then
+        verified=0
+        break
+      fi
+      excludes+=(--exclude="$path")
+    done < <(new_file_targets "$patch")
+    if [ "$verified" -eq 1 ] && [ ${#excludes[@]} -gt 0 ] &&
+       git apply --check "${excludes[@]}" "$patch" 2>/dev/null; then
+      git apply "${excludes[@]}" "$patch"
+      echo "APPLIED  $name (existing new files verified, skipped)"
+    else
+      echo "CONFLICT $name" >&2
+      FAILED+=("$name")
+    fi
   fi
 done
 

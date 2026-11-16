@@ -21,7 +21,8 @@ git pull origin main
 脚本行为：
 - 能干净应用的 patch 直接应用；
 - 已应用的（反向校验通过）跳过；
-- 应用失败的（upstream 改了相关代码导致冲突）报 CONFLICT 并以 exit 2 退出——此时需要手动把对应 patch 重新对 upstream 生成。
+- patch 新增的文件已在工作区、且 `git hash-object` 与 patch 目标 blob 一致时，跳过这些文件、应用 patch 其余部分（上次运行中断留下的现场可直接续上）；内容不一致仍判冲突；
+- 其余应用失败的（upstream 改了相关代码导致冲突）报 CONFLICT 并以 exit 2 退出——此时需要手动把对应 patch 重新对 upstream 生成。
 
 然后按 `BUILD.md` 编译打包。
 

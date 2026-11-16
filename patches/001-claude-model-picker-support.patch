@@ -33,7 +33,7 @@ index 68032bdf3d2..a8150f104d9 100644
      complete: isCompleteClaudeModelListing(listing) && configured !== undefined,
      ...(fastModeSupport ? { fastModeSupport } : {}),
 diff --git a/src/main/claude/model-catalog/claude-model-catalog-probe.ts b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
-index c885cf01b5f..8f3d478beea 100644
+index 3c3cc452437..279c5684e9b 100644
 --- a/src/main/claude/model-catalog/claude-model-catalog-probe.ts
 +++ b/src/main/claude/model-catalog/claude-model-catalog-probe.ts
 @@ -123,6 +123,7 @@ export function createClaudeModelCatalogProbe(
